@@ -106,3 +106,18 @@ The first live run of `stream-lifecycle.ts` reported `can withdraw 0.00016` and
 then withdrew `0.00026` — both correct, seconds apart. Show such figures as
 "at least", or re-read immediately before submitting, rather than presenting
 them as exact.
+
+## Against a local network
+
+To run without public testnet, start a standalone quickstart node and run the
+stream example against it:
+
+```bash
+docker compose -f packages/sdk/examples/docker-compose.yml up -d
+WASM_DIR=/path/to/sororail-contracts/target/wasm32v1-none/release \
+  bash packages/sdk/examples/run-local.sh
+```
+
+`run-local.sh` waits for the RPC, funds two accounts through friendbot, deploys
+a fresh stream contract and runs `stream-lifecycle.ts`. The other examples can
+be run the same way by setting the variables from the Setup section yourself.
