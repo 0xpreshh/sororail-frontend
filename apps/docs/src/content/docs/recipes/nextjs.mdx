@@ -1,0 +1,203 @@
+---
+title: Integrating with Next.js
+description: Set up the SDK in a Next.js app. Covers wallet code that must run in the browser, server components, and env handling.
+---
+
+Most SoroRail consumers are Next.js apps. The SDK itself has no framework
+dependencies, so the only Next-specific rules are about where code runs:
+
+- **Wallet code runs in the browser.** `FreighterSigner` reads the extension
+  injected into the page, so it can only be used inside a Client Component.
+- **Server Components read public config only.** They can build read-only
+  views, but they never hold a signer or a secret key.
+- **No secret keys in the app.** Signing happens in the user's wallet. Do not
+  add `KeypairSigner` to browser code. It is for scripts and tests.
+
+## Environment variables
+
+Only values safe to expose go in `NEXT_PUBLIC_*` variables. Contract IDs and
+RPC URLs are public.
+
+```bash
+# .env.local
+NEXT_PUBLIC_RPC_URL=https://soroban-testnet.stellar.org
+NEXT_PUBLIC_NETWORK_PASSPHRASE=Test SDF Network ; September 2015
+NEXT_PUBLIC_STREAM_CONTRACT_ID=C...
+```
+
+Read them through one module so the rest of the app never touches
+`process.env` directly:
+
+```ts
+// lib/network.ts
+export const RPC_URL = process.env.NEXT_PUBLIC_RPC_URL ?? "https://soroban-testnet.stellar.org";
+export const NETWORK_PASSPHRASE =
+  process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE ?? "Test SDF Network ; September 2015";
+export const STREAM_CONTRACT_ID = process.env.NEXT_PUBLIC_STREAM_CONTRACT_ID;
+
+if (!STREAM_CONTRACT_ID) {
+  throw new Error("NEXT_PUBLIC_STREAM_CONTRACT_ID is not set");
+}
+```
+
+Use `NEXT_PUBLIC_` values only. Anything without that prefix is undefined in
+the browser, which makes a missing value fail loudly there.
+
+## Wallet provider (Client Component)
+
+Connect the wallet once, near the root of the app. Import the SDK where it is
+used, not at module scope, so routes that never sign do not load the whole
+client bundle:
+
+```tsx
+// app/wallet-provider.tsx
+"use client";
+
+import type { FreighterSigner } from "@sororail/sdk";
+import { createContext, useContext, useState, type ReactNode } from "react";
+
+interface WalletState {
+  signer: FreighterSigner | null;
+  connect: () => Promise<void>;
+  error: string | null;
+}
+
+const WalletContext = createContext<WalletState | null>(null);
+
+export function WalletProvider({ children }: { children: ReactNode }) {
+  const [signer, setSigner] = useState<FreighterSigner | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function connect() {
+    try {
+      const { FreighterSigner, SigningError } = await import("@sororail/sdk");
+      const next = await FreighterSigner.connect();
+      // Refuse to sign on the wrong network. Throws NetworkMismatchError.
+      await next.assertNetwork(NETWORK_PASSPHRASE);
+      setSigner(next);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not connect the wallet.");
+    }
+  }
+
+  return (
+    <WalletContext.Provider value={{ signer, connect, error }}>{children}</WalletContext.Provider>
+  );
+}
+
+export function useWallet(): WalletState {
+  const value = useContext(WalletContext);
+  if (!value) throw new Error("useWallet must be used inside WalletProvider");
+  return value;
+}
+```
+
+`NETWORK_PASSPHRASE` comes from the `lib/network.ts` module above.
+
+Mount the provider in `app/layout.tsx`. Keep the layout a Server Component and
+wrap only its children:
+
+```tsx
+// app/layout.tsx
+import { WalletProvider } from "./wallet-provider";
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <WalletProvider>{children}</WalletProvider>
+      </body>
+    </html>
+  );
+}
+```
+
+## Sending a transaction from a Client Component
+
+Build, simulate, and then sign-and-send. Decode failures through the SDK's
+error classes so users see a sentence, not a raw code:
+
+```tsx
+// app/withdraw-button.tsx
+"use client";
+
+import { ContractError, NetworkError, SigningError, StreamClient } from "@sororail/sdk";
+import { useState } from "react";
+import { NETWORK_PASSPHRASE, RPC_URL, STREAM_CONTRACT_ID } from "../lib/network";
+import { useWallet } from "./wallet-provider";
+
+export function WithdrawButton() {
+  const { signer } = useWallet();
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function withdraw() {
+    if (!signer || !STREAM_CONTRACT_ID) return;
+    const stream = new StreamClient({
+      contractId: STREAM_CONTRACT_ID,
+      rpcUrl: RPC_URL,
+      networkPassphrase: NETWORK_PASSPHRASE,
+      publicKey: signer.publicKey,
+    });
+
+    try {
+      const call = await stream.withdraw();
+      await call.simulate(); // Fails before the wallet is asked to sign.
+      const { hash } = await call.signAndSend(signer);
+      setMessage(`Withdrawn. Transaction ${hash}`);
+    } catch (error) {
+      if (error instanceof ContractError) setMessage(error.message);
+      else if (error instanceof SigningError) setMessage(error.message);
+      else if (error instanceof NetworkError) setMessage("Could not reach the network. Try again.");
+      else throw error;
+    }
+  }
+
+  return (
+    <div>
+      <button onClick={withdraw} disabled={!signer}>
+        Withdraw
+      </button>
+      {message && <p role="status">{message}</p>}
+    </div>
+  );
+}
+```
+
+`ContractError.message` is written for people, so show it as is. Branch on
+`error.is("...")` only when the app needs to recover.
+
+## Read-only data in a Server Component
+
+Reads do not need a wallet. A Server Component can call the SDK with any funded
+account's address as the simulation source, and pass plain values to Client
+Components. `bigint` values cannot be sent across the server/client
+boundary as JSON, so convert them to strings first:
+
+```tsx
+// app/balance/page.tsx
+import { StreamClient } from "@sororail/sdk";
+import { NETWORK_PASSPHRASE, RPC_URL, STREAM_CONTRACT_ID } from "../../lib/network";
+
+export default async function BalancePage() {
+  const stream = new StreamClient({
+    contractId: STREAM_CONTRACT_ID!,
+    rpcUrl: RPC_URL,
+    networkPassphrase: NETWORK_PASSPHRASE,
+    publicKey: "G..." // any funded account, used only as a simulation source
+  });
+
+  const remaining = await stream.remaining();
+  return <p>Remaining: {remaining.toString()} stroops</p>;
+}
+```
+
+Keep amounts as `bigint` until the final display. See
+[Amounts and the decimals trap](/concepts/amounts/).
+
+## Checklist
+
+- [ ] Every signing component is a Client Component.
+- [ ] Only `NEXT_PUBLIC_*` variables are read in browser code.
+- [ ] `assertNetwork` runs before the first signature.
+- [ ] `ContractError`, `SigningError` and `NetworkError` are handled separately.
