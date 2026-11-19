@@ -297,7 +297,8 @@ nobody is paid.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md). For how the packages, wallet and
+contracts interact, read [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## License
 
