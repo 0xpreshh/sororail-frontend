@@ -1,0 +1,47 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/docs/**"
+      - "packages/sdk/examples/**"
+      - ".github/workflows/docs.yml"
+  # Manual dispatch builds and deploys the current branch, for previewing docs changes.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build docs site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          node-version: "22"
+      - uses: actions/configure-pages@v5
+      # The site includes the example sources from packages/sdk/examples, so the whole repo is needed.
+      - run: pnpm --filter @sororail/docs build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/docs/dist
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

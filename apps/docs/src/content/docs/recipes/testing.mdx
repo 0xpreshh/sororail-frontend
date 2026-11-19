@@ -1,0 +1,116 @@
+---
+title: Testing your integration
+description: Unit test code that uses the SDK with a fake signer and a fake RPC, in Vitest, without a network.
+---
+
+Code that calls the SDK can be unit tested without a live network. Two seams
+make that possible:
+
+- **The signer is injected.** `KeypairSigner.random()` gives you a real signer
+  backed by a throwaway key. Nothing is sent anywhere.
+- **The RPC boundary is the only thing you mock.** Transactions are still built,
+  simulated and decoded for real. Only the network calls to the RPC server are
+  replaced.
+
+The examples below use [Vitest](https://vitest.dev), which the SDK already uses.
+
+## The fake signer
+
+```ts
+import { KeypairSigner } from "@sororail/sdk";
+
+const signer = KeypairSigner.random();
+signer.publicKey; // "G..." a valid account address, never funded
+```
+
+Use it wherever your code takes a `Signer`. A test that needs an account to
+exist can also use the same key as the RPC source account, shown below.
+
+## The fake RPC
+
+Stub the two `rpc.Server` methods the SDK calls. `getAccount` supplies a
+sequence number. `simulateTransaction` returns the result a contract would
+return for the call under test:
+
+```ts
+// test/fake-rpc.ts
+import { Account, rpc, SorobanDataBuilder, xdr } from "@stellar/stellar-sdk";
+import { vi } from "vitest";
+
+export function mockRpc(retval: xdr.ScVal) {
+  const getAccount = vi
+    .spyOn(rpc.Server.prototype, "getAccount")
+    .mockImplementation(async (publicKey) => new Account(publicKey, "1"));
+
+  const simulateTransaction = vi
+    .spyOn(rpc.Server.prototype, "simulateTransaction")
+    .mockResolvedValue({
+      id: "test-simulation",
+      _parsed: true,
+      latestLedger: 1,
+      events: [],
+      transactionData: new SorobanDataBuilder(),
+      minResourceFee: "0",
+      result: { auth: [], retval },
+    } as rpc.Api.SimulateTransactionSuccessResponse);
+
+  return { getAccount, simulateTransaction };
+}
+```
+
+If a test does not configure a response, make the stub reject. That way an
+unexpected call fails the test, rather than reaching a live endpoint:
+
+```ts
+simulateTransaction.mockRejectedValue(new Error("Configure a simulation response for this test."));
+```
+
+`signAndSend` also calls `sendTransaction` and then polls `getTransaction`.
+Stub both the same way when a test needs the send path.
+
+## A Vitest example
+
+This test exercises a read through the real client, with the fake RPC and the
+fake signer:
+
+```ts
+// test/balance.test.ts
+import { afterEach, expect, it } from "vitest";
+import { nativeToScVal } from "@stellar/stellar-sdk";
+import { StreamClient, KeypairSigner } from "@sororail/sdk";
+import { mockRpc } from "./fake-rpc";
+
+const CONTRACT_ID = "C...";     // any valid contract address works with a fake RPC
+const RPC_URL = "https://rpc.example.invalid";
+
+afterEach(() => {
+  // Restore the real methods so mocks do not leak between tests.
+  vi.restoreAllMocks();
+});
+
+it("reads the accrued amount through the client", async () => {
+  mockRpc(nativeToScVal(250n, { type: "i128" }));
+
+  const signer = KeypairSigner.random();
+  const stream = new StreamClient({
+    contractId: CONTRACT_ID,
+    rpcUrl: RPC_URL,
+    networkPassphrase: "Test SDF Network ; September 2015",
+    publicKey: signer.publicKey,
+  });
+
+  const remaining = await stream.remaining();
+
+  expect(remaining).toBe(250n);
+});
+```
+
+Import `vi` from `vitest` in the test file. The example omits it for brevity.
+Use `toBe(250n)` rather than a `Number` comparison, because amounts are
+`bigint`.
+
+## What this does not cover
+
+A fake RPC does not check that a contract would accept the call. It only checks
+that your code builds the call and handles the result. Run the examples in
+`packages/sdk/examples` against testnet before you rely on the integration.
