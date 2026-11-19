@@ -54,3 +54,7 @@ the wallet.
 ## Security
 
 Do not report vulnerabilities through public issues. See [SECURITY.md](SECURITY.md).
+
+## Code of conduct
+
+This project follows the [Code of Conduct](CODE_OF_CONDUCT.md). Report unacceptable behavior using the contact given there.

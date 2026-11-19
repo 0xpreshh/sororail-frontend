@@ -1,0 +1,10 @@
+# Local Stellar network for running the SDK examples without public testnet.
+#   docker compose -f packages/sdk/examples/docker-compose.yml up -d
+# RPC: http://localhost:8000/soroban/rpc   Friendbot: http://localhost:8000/friendbot
+services:
+  quickstart:
+    # Pin a tag rather than `latest` once a known-good version is chosen.
+    image: stellar/quickstart:latest
+    command: ["--local", "--enable", "rpc"]
+    ports:
+      - "8000:8000"

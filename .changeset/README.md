@@ -39,6 +39,22 @@ consumed changeset files together, before publishing.
 The `@sororail` npm scope is **not yet reserved**, and nothing has been
 published. Reserve it before the first release, or `publish` will fail.
 
+## Automated release (`.github/workflows/release.yml`)
+
+On every push to `main` the release workflow opens or updates a "version
+packages" pull request from the pending changesets. Publishing to npm happens
+only when the repository variable `SDK_PUBLISH_ENABLED` is set to `true`, so
+the workflow runs in dry-run mode (version PR only) until the scope is reserved.
+
+Required setup before enabling publish:
+
+- **Secret `NPM_TOKEN`**: an npm automation token with publish rights to the
+  `@sororail` scope.
+- **Repository variable `SDK_PUBLISH_ENABLED`**: `true` to publish, unset to dry-run.
+- **Workflow permission `id-token: write`**: already set in the release
+  workflow. npm provenance (set in `packages/sdk/package.json` under
+  `publishConfig`) needs it, so publishing fails without it.
+
 ## Versioning rules
 
 `@sororail/sdk` tracks the contracts' ABI. Two things force a **major** bump
